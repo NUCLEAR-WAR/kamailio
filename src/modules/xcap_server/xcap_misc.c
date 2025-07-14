@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
 
@@ -35,10 +36,15 @@
 #include "../../core/mem/mem.h"
 #include "../../core/parser/parse_param.h"
 #include "../../modules/xcap_client/xcap_callbacks.h"
+#include <libxml/xpath.h>
 
 #include "xcap_misc.h"
 
 extern str xcaps_root;
+
+// Added extern declarations for AUID support
+extern str *auid_list;
+extern int auid_count;
 
 static param_t *_xcaps_xpath_ns_root = NULL;
 
@@ -56,26 +62,66 @@ xcaps_auid_list_t xcaps_auid_list[] = {{{"pres-rules", 10}, '/', PRES_RULES},
 
 		{{0, 0}, 0, 0}};
 
+// AUID support
 static int xcaps_find_auid(str *s, xcap_uri_t *xuri)
 {
 	int i;
+	
+	/* First check built-in list */
 	for(i = 0; xcaps_auid_list[i].auid.s != NULL; i++) {
 		if(s->len > xcaps_auid_list[i].auid.len
 				&& s->s[xcaps_auid_list[i].auid.len] == xcaps_auid_list[i].term
-				&& strncmp(s->s, xcaps_auid_list[i].auid.s,
+				&& strncasecmp(s->s, xcaps_auid_list[i].auid.s,
 						   xcaps_auid_list[i].auid.len)
 						   == 0) {
-			LM_DBG("matched %.*s\n", xcaps_auid_list[i].auid.len,
-					xcaps_auid_list[i].auid.s);
+			LM_DBG("matched built-in auid %.*s\n", 
+                   xcaps_auid_list[i].auid.len, xcaps_auid_list[i].auid.s);
 			xuri->type = xcaps_auid_list[i].type;
 			xuri->auid.s = s->s;
 			xuri->auid.len = xcaps_auid_list[i].auid.len;
 			return 0;
 		}
 	}
+	
+	/* Then check configured auid_list */
+	if(auid_list) {
+		for(i = 0; i < auid_count; i++) {
+			if(auid_list[i].len > 0 && 
+			   s->len >= auid_list[i].len &&
+			   strncasecmp(s->s, auid_list[i].s, auid_list[i].len) == 0) {
+				
+				/* Check terminator character */
+				char term = (s->len > auid_list[i].len) ? 
+                            s->s[auid_list[i].len] : '\0';
+				
+				if(term == '/' || term == '?' || term == '\0') {
+					LM_DBG("matched configured auid %.*s\n", 
+                           auid_list[i].len, auid_list[i].s);
+					xuri->type = PRES_RULES; /* Default type */
+					xuri->auid.s = s->s;
+					xuri->auid.len = auid_list[i].len;
+					return 0;
+				}
+			}
+		}
+	}
+	
 	LM_ERR("unsupported auid in [%.*s]\n", xuri->uri.len, xuri->uri.s);
 	return -1;
 }
+
+
+// Add this function to register namespaces for USSD
+static void xcaps_register_xpath_ns(xmlXPathContextPtr ctx)
+{
+    xmlXPathRegisterNs(ctx, BAD_CAST "cp", 
+                      BAD_CAST "urn:ietf:params:xml:ns:common-policy");
+    xmlXPathRegisterNs(ctx, BAD_CAST "ocp", 
+                      BAD_CAST "urn:oma:xml:xdm:common-policy");
+    xmlXPathRegisterNs(ctx, BAD_CAST "ss", 
+                      BAD_CAST "http://uri.etsi.org/ngn/params/xml/simservs/xcap");
+}
+
 
 /**
  * parse xcap uri
@@ -105,6 +151,10 @@ int xcap_parse_uri(str *huri, str *xroot, xcap_uri_t *xuri)
 				LM_ERR("invalid http uri - hexa value too short\n");
 				return -1;
 			}
+			if(i >= XCAP_MAX_URI_SIZE) {
+				LM_ERR("http uri too long after decoding\n");
+				return -1;
+ 			}
 			p++;
 			if(*p >= '0' && *p <= '9')
 				xuri->buf[i] = (*p - '0') << 4;
@@ -125,6 +175,10 @@ int xcap_parse_uri(str *huri, str *xroot, xcap_uri_t *xuri)
 				return -1;
 		} else {
 			xuri->buf[i] = *p;
+			if(i >= XCAP_MAX_URI_SIZE) {
+				LM_ERR("http uri too long\n");
+				return -1;
+			}
 		}
 		i++;
 	}
@@ -301,7 +355,9 @@ int xcaps_xpath_get(str *inbuf, str *xpaths, str *outbuf)
 		LM_ERR("unable to create new XPath context\n");
 		goto error;
 	}
-
+    // Register namespaces here func xcaps_register_xpath_ns for USSD
+     xcaps_register_xpath_ns(xpathCtx);
+    
 	/* Evaluate xpath expression */
 	// xcaps_xpath_register_ns(xpathCtx);
 	xpathObj = xmlXPathEvalExpression((const xmlChar *)xpaths->s, xpathCtx);
@@ -435,7 +491,8 @@ int xcaps_xpath_set(str *inbuf, str *xpaths, str *val, str *outbuf)
 		LM_ERR("unable to create new XPath context\n");
 		goto error;
 	}
-
+    // Register namespaces here func xcaps_register_xpath_ns for USSD
+    xcaps_register_xpath_ns(xpathCtx);
 	/* Evaluate xpath expression */
 	xpathObj = xmlXPathEvalExpression((const xmlChar *)xpaths->s, xpathCtx);
 	if(xpathObj == NULL) {
