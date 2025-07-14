@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <ctype.h> // Added for isspace()
 
 #include "../../lib/srdb1/db.h"
 #include "../../core/pt.h"
@@ -47,13 +48,24 @@
 #include "../../core/strutils.h"
 #include "../../core/ip_addr.h"
 #include "../../core/kemi.h"
-
+#include <libxml/xpath.h>
 #include "xcap_misc.h"
 
 MODULE_VERSION
 
 #define XCAP_TABLE_VERSION 4
 
+// Added global variables for AUID support
+str *auid_list = NULL;
+int auid_count = 0;
+
+typedef struct {
+    str auid;
+    str content_type;
+} content_type_map_t;
+
+static content_type_map_t *content_type_maps = NULL;
+static int content_type_map_count = 0;
 
 static int xcaps_put_db(
 		str *user, str *domain, xcap_uri_t *xuri, str *etag, str *doc);
@@ -109,6 +121,143 @@ db_func_t xcaps_dbf;
 /** SL API structure */
 sl_api_t slb;
 
+// Adding a new function remove_xmlns_param()
+static void remove_xmlns_param(str *uri)
+{
+    char *p;
+    char *end;
+    char *start_param = NULL;
+    char *closing;
+    int removed;
+
+    if(uri == NULL || uri->s == NULL || uri->len <= 0) {
+        return;
+    }
+
+    p = uri->s;
+    end = p + uri->len;
+
+    while(p < end) {
+        removed = 0;
+        if(*p == '?' || *p == '&') {
+            if((end - p) >= 7 && memcmp(p+1, "xmlns(", 6)==0) {
+                start_param = p;
+                p += 7;
+                while(p < end && *p != ')') {
+                    p++;
+                }
+                if(p < end && *p == ')') {
+                    closing = p;
+                    memmove(start_param, closing+1, end - closing - 1);
+                    uri->len -= (closing - start_param + 1);
+                    removed = 1;
+                    end = uri->s + uri->len;
+                }
+            }
+        }
+        if(!removed) {
+            p++;
+        }
+    }
+}
+
+
+
+// Added: AUID parameter handler
+static int xcaps_auid_param(modparam_t type, void *val)
+{
+    str s;
+    char *p;
+    
+    if(val == NULL) return -1;
+    
+    s.s = (char*)val;
+    s.len = strlen(s.s);
+    if(s.len == 0) return 0;
+    
+    /* Count how many AUIDs we have */
+    for(p = s.s; p < s.s + s.len; p++) {
+        if(*p == ',') auid_count++;
+    }
+    auid_count++;  /* Last one doesn't have comma */
+    
+    auid_list = (str*)pkg_malloc(auid_count * sizeof(str));
+    if(!auid_list) {
+        PKG_MEM_ERROR;
+        return -1;
+    }
+    
+    memset(auid_list, 0, auid_count * sizeof(str));
+    
+    /* Parse comma-separated list */
+    p = s.s;
+    int i = 0;
+    char *start = p;
+    while(p <= s.s + s.len) {
+        if(*p == ',' || p == s.s + s.len) {
+            auid_list[i].s = start;
+            auid_list[i].len = p - start;
+            
+            /* Trim whitespace */
+            while(auid_list[i].len > 0 && isspace(auid_list[i].s[0])) {
+                auid_list[i].s++;
+                auid_list[i].len--;
+            }
+            while(auid_list[i].len > 0 && 
+                  isspace(auid_list[i].s[auid_list[i].len-1])) {
+                auid_list[i].len--;
+            }
+            
+            i++;
+            start = p + 1;
+        }
+        p++;
+    }
+    
+    return 0;
+}
+
+static int xcaps_content_type_map_param(modparam_t type, void *val)
+{
+    char *p = (char*)val;
+    char *sep;
+    
+    if(!p) return -1;
+    
+    /* Count the number of mappings */
+    content_type_map_count++;
+    content_type_maps = pkg_realloc(content_type_maps, 
+                                   content_type_map_count * sizeof(content_type_map_t));
+    if(!content_type_maps) {
+        PKG_MEM_ERROR;
+        return -1;
+    }
+    
+    /* Find the separator */
+    sep = strchr(p, '=');
+    if(!sep) {
+        LM_ERR("invalid content_type_map format: %s\n", p);
+        return -1;
+    }
+    
+    /* Set AUID */
+    content_type_maps[content_type_map_count-1].auid.s = p;
+    content_type_maps[content_type_map_count-1].auid.len = sep - p;
+    
+    /* Set Content-Type */
+    content_type_maps[content_type_map_count-1].content_type.s = sep + 1;
+    content_type_maps[content_type_map_count-1].content_type.len = strlen(sep + 1);
+    
+    LM_DBG("Mapped AUID '%.*s' to Content-Type '%.*s'\n",
+           content_type_maps[content_type_map_count-1].auid.len,
+           content_type_maps[content_type_map_count-1].auid.s,
+           content_type_maps[content_type_map_count-1].content_type.len,
+           content_type_maps[content_type_map_count-1].content_type.s);
+    
+    return 0;
+}
+
+
 /* clang-format off */
 static pv_export_t mod_pvs[] = {
 	{{"xcapuri", sizeof("xcapuri") - 1}, PVT_OTHER, pv_get_xcap_uri,
@@ -124,6 +273,8 @@ static param_export_t params[] = {
 	{"xml_ns", PARAM_STRING | PARAM_USE_FUNC, (void *)xcaps_xpath_ns_param},
 	{"directory_scheme", PARAM_INT, &xcaps_directory_scheme},
 	{"directory_hostname", PARAM_STR, &xcaps_directory_hostname},
+	{"auid", PARAM_STRING | PARAM_USE_FUNC, (void *)xcaps_auid_param}, // Added
+	{"content_type_map", PARAM_STRING | PARAM_USE_FUNC, (void *)xcaps_content_type_map_param}, // Added
 	{0, 0, 0}
 };
 
@@ -232,6 +383,21 @@ static void destroy(void)
 {
 	if(xcaps_db != NULL)
 		xcaps_dbf.close(xcaps_db);
+	
+	// Free AUID list memory
+	if(auid_list) {
+		pkg_free(auid_list);
+		auid_list = NULL;
+		auid_count = 0;
+	}
+
+    // Free Content-Type mapping memory
+    if(content_type_maps) {
+        pkg_free(content_type_maps);
+        content_type_maps = NULL;
+        content_type_map_count = 0;
+    }
+
 }
 
 
@@ -491,6 +657,8 @@ static int ki_xcaps_put(sip_msg_t *msg, str *uri, str *path, str *pbody)
 		LM_ERR("parsing uri parameter [%.*s]\n", uri->len, uri->s);
 		goto error;
 	}
+    /* Remove xmlns parameter from path */
+    remove_xmlns_param(path);
 
 	if(xcap_parse_uri(path, &xcaps_root, &xuri) < 0) {
 		LM_ERR("cannot parse xcap uri [%.*s]\n", path->len, path->s);
@@ -1029,6 +1197,9 @@ static int ki_xcaps_get(sip_msg_t *msg, str *uri, str *path)
 		goto error;
 	}
 
+    /* Remove xmlns parameter from path */
+    remove_xmlns_param(path);
+    
 	if(xcap_parse_uri(path, &xcaps_root, &xuri) < 0) {
 		LM_ERR("cannot parse xcap uri [%.*s]\n", path->len, path->s);
 		goto error;
@@ -1124,6 +1295,17 @@ static int ki_xcaps_get(sip_msg_t *msg, str *uri, str *path)
 			}
 
 			/* doc or element found */
+/* Before the existing ctype assignment */
+int i;
+for(i = 0; i < content_type_map_count; i++) {
+    if(xuri.auid.len == content_type_maps[i].auid.len &&
+       strncasecmp(xuri.auid.s, content_type_maps[i].auid.s, xuri.auid.len) == 0) {
+        ctype = &content_type_maps[i].content_type;
+        break;
+    }
+}      
+      
+      if(ctype == NULL) {
 			ctype = &xcaps_str_appxml;
 			if(xuri.type == RESOURCE_LIST)
 				ctype = &xcaps_str_apprlxml;
@@ -1137,6 +1319,8 @@ static int ki_xcaps_get(sip_msg_t *msg, str *uri, str *path)
 				ctype = &xcaps_str_apppcxml;
 			else if(xuri.type == PIDF_MANIPULATION)
 				ctype = &xcaps_str_apppdxml;
+      }  
+        
 			xcaps_send_reply(msg, 200, &xcaps_str_ok, &etag, ctype, &body);
 
 			break;
@@ -1248,6 +1432,9 @@ static int ki_xcaps_del(sip_msg_t *msg, str *uri, str *path)
 		LM_ERR("parsing uri parameter [%.*s]\n", uri->len, uri->s);
 		goto error;
 	}
+
+    /* Remove xmlns parameter from path */
+    remove_xmlns_param(path);
 
 	if(xcap_parse_uri(path, &xcaps_root, &xuri) < 0) {
 		LM_ERR("cannot parse xcap uri [%.*s]\n", path->len, path->s);
