@@ -29,7 +29,7 @@
 #include "../../core/sr_module.h"
 #include "../../core/pvar.h"
 
-#define XCAP_MAX_URI_SIZE 255
+#define XCAP_MAX_URI_SIZE 1024
 /* Node Selector Separator */
 #define XCAP_NSS "~~"
 
@@ -59,6 +59,10 @@ typedef struct xcaps_auid_list
 } xcaps_auid_list_t;
 
 extern xcaps_auid_list_t xcaps_auid_list[];
+
+// Added extern declarations for AUID support
+extern str *auid_list;
+extern int auid_count;
 
 int xcap_parse_uri(str *huri, str *xroot, xcap_uri_t *xuri);
 int xcaps_xpath_set(str *inbuf, str *xpaths, str *val, str *outbuf);
