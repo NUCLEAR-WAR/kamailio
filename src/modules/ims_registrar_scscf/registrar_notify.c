@@ -1913,8 +1913,8 @@ static void process_xml_for_explit_dereg_contact(
 	LM_DBG("Processing XML for explicit dereg contact address: <%.*s>\n",
 			explit_dereg_contact.len, explit_dereg_contact.s);
 
-	sprintf(pad->s, contact_s_q.s, 1, r_terminated.len, r_terminated.s,
-			r_expired.len, r_expired.s, 0);
+	sprintf(pad->s, contact_s_q.s, (void *)1, r_terminated.len, r_terminated.s,
+			r_expired.len, r_expired.s, 0, 0.0);
 
 	pad->len = strlen(pad->s);
 	STR_APPEND(*buf, *pad);

@@ -180,8 +180,11 @@ AAAMessage *cxdx_process_ppr(AAAMessage *request)
 
 static void cx_notify(impurecord_t *r, ucontact_t *c, int reason)
 {
-	notify_subscribers(r, c, 0, 0, reason == 2
-			? IMS_REGISTRAR_CONTACT_DEACTIVATED : IMS_REGISTRAR_CONTACT_DEREGISTERED);
+	/* RTR marks the contact deleted before the asynchronous XML builder runs.
+	 * Preserve its URI in the notification's copied deregistration list. */
+	notify_subscribers(r, c, &c->c, 1,
+			reason == 2 ? IMS_REGISTRAR_CONTACT_DEACTIVATED
+						: IMS_REGISTRAR_CONTACT_DEREGISTERED);
 }
 
 AAAMessage *cxdx_process_rtr(AAAMessage *request)
