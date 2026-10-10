@@ -167,6 +167,8 @@ static int ds_init_rpc(void);
 
 static int w_ds_select(sip_msg_t*, char*, char*);
 static int w_ds_select_limit(sip_msg_t*, char*, char*, char*);
+static int w_ds_select_dns0(sip_msg_t*, char*, char*);
+static int w_ds_select_dns1(sip_msg_t*, char*, char*);
 static int w_ds_select_dst(struct sip_msg*, char*, char*);
 static int w_ds_select_dst_limit(struct sip_msg*, char*, char*, char*);
 static int w_ds_select_domain(struct sip_msg*, char*, char*);
@@ -226,6 +228,10 @@ static cmd_export_t cmds[]={
 		fixup_igp_igp, fixup_free_igp_igp, ANY_ROUTE},
 	{"ds_select",    (cmd_function)w_ds_select_limit,      3,
 		fixup_igp_all, fixup_free_igp_all, REQUEST_ROUTE|FAILURE_ROUTE},
+	{"ds_select_dns", (cmd_function)w_ds_select_dns0,      0,
+		0, 0, REQUEST_ROUTE|FAILURE_ROUTE},
+	{"ds_select_dns", (cmd_function)w_ds_select_dns1,      1,
+		fixup_igp_null, fixup_free_igp_null, REQUEST_ROUTE|FAILURE_ROUTE},
 	{"ds_select_dst",    (cmd_function)w_ds_select_dst,    2,
 		fixup_igp_igp, fixup_free_igp_igp, REQUEST_ROUTE|FAILURE_ROUTE},
 	{"ds_select_dst",    (cmd_function)w_ds_select_dst_limit,    3,
@@ -713,6 +719,32 @@ static int w_ds_select_limit(
 {
 	return w_ds_select_addr(msg, set, alg, limit /* limit number of dst*/,
 			DS_SETOP_XAVP /*set no dst/uri*/);
+}
+
+/**
+ *
+ */
+static int w_ds_select_dns0(sip_msg_t *msg, char *p1, char *p2)
+{
+	return ds_select_dns(msg, 0);
+}
+
+/**
+ *
+ */
+static int w_ds_select_dns1(sip_msg_t *msg, char *limit, char *p2)
+{
+	int vlimit;
+
+	if(fixup_get_ivalue(msg, (gparam_t *)limit, &vlimit) < 0) {
+		LM_ERR("unable to get DNS destination limit\n");
+		return -1;
+	}
+	if(vlimit < 0) {
+		LM_ERR("DNS destination limit must not be negative\n");
+		return -1;
+	}
+	return ds_select_dns(msg, (uint32_t)vlimit);
 }
 
 /**
@@ -1687,6 +1719,26 @@ static int ki_ds_select_limit(sip_msg_t *msg, int set, int alg, int limit)
 /**
  *
  */
+static int ki_ds_select_dns(sip_msg_t *msg)
+{
+	return ds_select_dns(msg, 0);
+}
+
+/**
+ *
+ */
+static int ki_ds_select_dns_limit(sip_msg_t *msg, int limit)
+{
+	if(limit < 0) {
+		LM_ERR("DNS destination limit must not be negative\n");
+		return -1;
+	}
+	return ds_select_dns(msg, (uint32_t)limit);
+}
+
+/**
+ *
+ */
 static int ki_ds_select_dst(sip_msg_t *msg, int set, int alg)
 {
 	return ds_select_dst_limit(msg, set, alg, 0xffff /* limit number of dst*/,
@@ -1766,6 +1818,16 @@ static sr_kemi_t sr_kemi_dispatcher_exports[] = {
 	{ str_init("dispatcher"), str_init("ds_select_limit"),
 		SR_KEMIP_INT, ki_ds_select_limit,
 		{ SR_KEMIP_INT, SR_KEMIP_INT, SR_KEMIP_INT,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dispatcher"), str_init("ds_select_dns"),
+		SR_KEMIP_INT, ki_ds_select_dns,
+		{ SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dispatcher"), str_init("ds_select_dns_limit"),
+		SR_KEMIP_INT, ki_ds_select_dns_limit,
+		{ SR_KEMIP_INT, SR_KEMIP_NONE, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
 	{ str_init("dispatcher"), str_init("ds_select_domain"),
@@ -2331,6 +2393,9 @@ static void dispatcher_rpc_add(rpc_t *rpc, void *ctx)
 static const char *dispatcher_rpc_remove_doc[2] = {
 		"Remove a destination address from memory", 0};
 
+static const char *dispatcher_rpc_update_doc[2] = {
+		"Update a destination address in memory", 0};
+
 
 /*
  * RPC command to remove a destination address from memory
@@ -2360,6 +2425,46 @@ static void dispatcher_rpc_remove(rpc_t *rpc, void *ctx)
 		return;
 	}
 	rpc->rpl_printf(ctx, "Ok. Dispatcher destination removed.");
+	return;
+}
+
+/*
+ * RPC command to replace a destination address in memory
+ */
+static void dispatcher_rpc_update(rpc_t *rpc, void *ctx)
+{
+	int group, flags, priority, nparams;
+	str dest;
+	str attrs = STR_NULL;
+
+	if(ds_rpc_reload_time != NULL) {
+		if(*ds_rpc_reload_time != 0
+				&& *ds_rpc_reload_time > time(NULL) - ds_reload_delta) {
+			LM_ERR("ongoing reload\n");
+			rpc->fault(ctx, 500, "Ongoing reload");
+			return;
+		}
+		*ds_rpc_reload_time = time(NULL);
+	}
+
+	flags = 0;
+	priority = 0;
+
+	nparams =
+			rpc->scan(ctx, "dS*ddS", &group, &dest, &flags, &priority, &attrs);
+	if(nparams < 2) {
+		rpc->fault(ctx, 500, "Invalid Parameters");
+		return;
+	} else if(nparams <= 4) {
+		attrs.s = 0;
+		attrs.len = 0;
+	}
+
+	if(ds_update_dst_record(group, &dest, flags, priority, &attrs) != 0) {
+		rpc->fault(ctx, 500, "Updating dispatcher dst failed");
+		return;
+	}
+	rpc->rpl_printf(ctx, "Ok. Dispatcher destination updated.");
 	return;
 }
 
@@ -2476,6 +2581,8 @@ rpc_export_t dispatcher_rpc_cmds[] = {
 		dispatcher_rpc_ping_active_doc, 0},
 	{"dispatcher.add",   dispatcher_rpc_add,
 		dispatcher_rpc_add_doc, 0},
+	{"dispatcher.update", dispatcher_rpc_update,
+		dispatcher_rpc_update_doc, 0},
 	{"dispatcher.remove",   dispatcher_rpc_remove,
 		dispatcher_rpc_remove_doc, 0},
 	{"dispatcher.hash",   dispatcher_rpc_hash,

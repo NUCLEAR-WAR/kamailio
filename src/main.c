@@ -86,6 +86,7 @@
 #include "core/modparam.h"
 #include "core/timer.h"
 #include "core/parser/msg_parser.h"
+#include "core/parser/parse_bytes.h"
 #include "core/ip_addr.h"
 #include "core/resolve.h"
 #include "core/parser/parse_hname2.h"
@@ -134,6 +135,7 @@
 #include "core/rand/cryptorand.h"
 
 #include "core/counters.h"
+#include "core/worker_stats.h"
 #include "core/cfg/cfg.h"
 #include "core/cfg/cfg_struct.h"
 #include "core/cfg_core.h"
@@ -258,6 +260,7 @@ Options:\n\
     -x name      Specify internal manager for shared memory (shm)\n\
                   - can be: fm, qm or tlsf\n\
     -X name      Specify internal manager for private memory (pkg)\n\
+                  - can be: fm, qm, tlsf or sm\n\
                   - if omitted, the one for shm is used\n\
     -Y dir       Runtime dir path\n\
     -w dir       Change the working directory to \"dir\" (default: \"/\")\n"
@@ -1017,7 +1020,7 @@ int parse_proto(unsigned char *s, long len, int *proto)
 			| 0x20202020)
 	unsigned int i;
 	if(likely(len == 3)) {
-		i = PROTO2UINT3(s[0], s[1], s[2]);
+		i = ksr_ascii_lower_u32(ksr_read_u24be((const char *)s));
 		switch(i) {
 			case PROTO2UINT3('u', 'd', 'p'):
 				*proto = PROTO_UDP;
@@ -1044,7 +1047,7 @@ int parse_proto(unsigned char *s, long len, int *proto)
 	}
 #ifdef USE_SCTP
 	else if(likely(len == 4)) {
-		i = PROTO2UINT4(s[0], s[1], s[2], s[3]);
+		i = ksr_ascii_lower_u32(ksr_read_u32be((const char *)s));
 		if(i == PROTO2UINT4('s', 'c', 't', 'p')) {
 			if(sctp_disable) {
 				return -1;
@@ -2396,7 +2399,10 @@ int main(int argc, char **argv)
 	}
 
 	/*init pkg mallocs (before parsing cfg or the rest of the cmd line !)*/
-	if(pkg_mem_size)
+	if(strcmp(sr_memmng_pkg, "sm") == 0)
+		LM_INFO("private (per process) memory: system malloc, -M "
+				"ignored\n");
+	else if(pkg_mem_size)
 		LM_INFO("private (per process) memory: %ld bytes\n", pkg_mem_size);
 	if(pkg_init_manager(sr_memmng_pkg) < 0)
 		goto error;
@@ -3375,6 +3381,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "ERROR: error while initializing modules\n");
 		goto error;
 	}
+
+	/* occupancy counters - must be registered before counters_prefork_init() */
+	if(ksr_worker_stats_init() < 0)
+		goto error;
 
 	/* initialize process_table, add core process no. (calc_proc_no()) to the
 	 * processes registered from the modules*/

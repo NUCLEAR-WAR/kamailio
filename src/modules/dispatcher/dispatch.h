@@ -172,12 +172,15 @@ int ds_reload_db(void);
 int ds_destroy_list(void);
 int ds_select_dst_limit(sip_msg_t *msg, int set, int alg, uint32_t limit,
 		int mode, ds_selres_t *sres);
+int ds_select_dns(sip_msg_t *msg, uint32_t limit);
 int ds_select_routes_limit(
 		sip_msg_t *msg, str *srules, str *smode, int rlimit, ds_selres_t *sres);
 int ds_select_dst(struct sip_msg *msg, int set, int alg, int mode);
 int ds_update_dst(struct sip_msg *msg, int upos, int mode);
 int ds_add_dst(int group, str *address, int flags, int priority, str *attrs);
 int ds_remove_dst(int group, str *address);
+int ds_update_dst_record(
+		int group, str *address, int flags, int priority, str *attrs);
 int ds_update_state(sip_msg_t *msg, int group, str *address, str *iuid,
 		int state, int mode, ds_rctx_t *rctx);
 int ds_reinit_state(int group, str *address, str *iuid, int state);
@@ -327,6 +330,7 @@ struct ds_filter_dest_cb_arg {
 	int setid;
 	ds_dest_t *dest;
 	ds_list_t *list;
+	int error;
 };
 
 /* clang-format on */

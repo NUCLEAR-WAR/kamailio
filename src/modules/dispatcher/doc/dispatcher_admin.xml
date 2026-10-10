@@ -1835,6 +1835,45 @@ failure_route[REROUTE] {
 </programlisting>
 		</example>
 	</section>
+	<section id="dispatcher.f.ds_select_dns">
+		<title>
+		<function moreinfo="none">ds_select_dns([limit])</function>
+		</title>
+		<para>
+		Resolves the current next hop using the procedures from RFC 3263 and
+		stores the resulting target addresses in the XAVP configured by the
+		<varname>xavp_dst</varname> parameter. The destination URI is used as
+		the next hop when it is set; otherwise, the Request-URI is used.
+		The lookup performs NAPTR, SRV, and CNAME/A/AAAA queries as required by
+		the URI and stores concrete SIP URIs containing the resolved IP address,
+		port, and transport in DNS selection order.
+		</para>
+		<para>
+		The optional <emphasis>limit</emphasis> parameter is a positive integer
+		or a variable containing an integer. Resolution stops after this number
+		of targets has been stored. A missing or zero value means no limit.
+		</para>
+		<para>
+		The function returns true if at least one target was resolved and stored.
+		The generated XAVP records contain the <quote>uri</quote> field and can be
+		used by <function>ds_next_dst()</function> for serial failover when bit 2
+		of the <varname>flags</varname> parameter is set.
+		</para>
+		<para>
+		This function can be used from REQUEST_ROUTE and FAILURE_ROUTE.
+		</para>
+		<example>
+		<title><function>ds_select_dns</function> usage</title>
+		<programlisting format="linespecific">
+...
+if(ds_select_dns("8")) {
+	ds_next_dst();
+	t_relay();
+}
+...
+		</programlisting>
+		</example>
+	</section>
 	<section>
 		<title>
 		<function moreinfo="none">ds_next_dst()</function>
@@ -2532,6 +2571,48 @@ DEST: {
 &sercmd; dispatcher.add 2 sip:127.0.0.1:5080
 &sercmd; dispatcher.add 3 sip:127.0.0.1:5075 8
 &sercmd; dispatcher.add 3 sip:127.0.0.1:5075 0 0 duid=abc;socket=udp:127.0.0.1:5060
+...
+</programlisting>
+	</section>
+		<section id="dispatcher.r.update">
+		<title>
+		<function moreinfo="none">dispatcher.update</function>
+		</title>
+		<para>
+		Replace a destination address in the in-memory dispatcher list. All
+		records matching the destination group and address are removed and the
+		new destination is added in one atomic update of the routing structure.
+		If no matching record exists, the destination is added.
+		</para>
+		<para>
+		Reloading the dispatcher will replace this change with the destinations
+		loaded from the configured file or database.
+		</para>
+		<para>
+		Name: <emphasis>dispatcher.update</emphasis>
+		</para>
+		<para>Parameters:</para>
+		<itemizedlist>
+			<listitem><para>_group_: destination group id</para></listitem>
+
+			<listitem><para>_address_: address of the destination in the _group_</para></listitem>
+
+			<listitem><para>_flags_ (optional): as described in the list file format,
+			default 0</para></listitem>
+
+			<listitem><para>_priority_ (optional): as described in the list file format,
+			default 0</para></listitem>
+
+			<listitem><para>_attrs_ (optional): as described in the list file format,
+			default ""</para></listitem>
+		</itemizedlist>
+		<para>
+		Example:
+		</para>
+<programlisting format="linespecific">
+...
+# prototype: &sercmd; dispatcher.update _group_ _address_ _flags_ _priority_ _attrs_
+&sercmd; dispatcher.update 3 sip:127.0.0.1:5075 8 10 duid=abc;socket=udp:127.0.0.1:5060
 ...
 </programlisting>
 	</section>
