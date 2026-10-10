@@ -23,6 +23,9 @@
  */
 
 #include "cxdx_callbacks.h"
+#include "../../core/str.h"
+#include "../../core/dprint.h"
+#include "../ims_usrloc_scscf/usrloc.h"
 #include "cxdx_avp.h"
 #include "registrar_notify.h"
 #include "userdata_parser.h"
