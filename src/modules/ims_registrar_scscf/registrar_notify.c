@@ -1376,8 +1376,9 @@ int subscribe_to_reg(struct sip_msg *msg, char *_t, char *str2)
 
 		ret = CSCF_RETURN_TRUE;
 		LM_DBG("Sending 200 OK to subscribing user\n");
+		/* The dialog remote target is the notifier, not the watched IMPU. */
 		subscribe_reply(
-				msg, 200, MSG_REG_SUBSCRIBE_OK, &expires, &presentity_uri);
+				msg, 200, MSG_REG_SUBSCRIBE_OK, &expires, &scscf_name_str);
 
 		if(event_type == IMS_REGISTRAR_SUBSCRIBE
 				|| event_type == IMS_REGISTRAR_SUBSEQUENT_SUBSCRIBE) {
@@ -1428,7 +1429,7 @@ int subscribe_to_reg(struct sip_msg *msg, char *_t, char *str2)
 		ret = CSCF_RETURN_TRUE;
 		LM_DBG("Sending 200 OK to subscribing user\n");
 		subscribe_reply(
-				msg, 200, MSG_REG_UNSUBSCRIBE_OK, &expires, &presentity_uri);
+				msg, 200, MSG_REG_UNSUBSCRIBE_OK, &expires, &scscf_name_str);
 	}
 
 doneorerror:
