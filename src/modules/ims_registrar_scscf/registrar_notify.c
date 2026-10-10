@@ -545,6 +545,7 @@ int event_reg(udomain_t *_d, impurecord_t *r_passed, ucontact_t *c_passed,
 
 			//richard: we only use reg unreg expired and refresh
 		case IMS_REGISTRAR_CONTACT_UNREGISTERED:
+		case IMS_REGISTRAR_CONTACT_DEACTIVATED:
 		case IMS_REGISTRAR_CONTACT_DEREGISTERED:
 		case IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT:
 		case IMS_REGISTRAR_CONTACT_REGISTERED:
@@ -1883,6 +1884,7 @@ static str r_registered = {"registered", 10};
 static str r_refreshed = {"refreshed", 9};
 static str r_expired = {"expired", 7};
 static str r_unregistered = {"unregistered", 12};
+static str r_deactivated = {"deactivated", 11};
 static str contact_s = {"\t\t<contact id=\"%p\" state=\"%.*s\" event=\"%.*s\" "
 						"expires=\"%d\">\n",
 		59};
@@ -2243,7 +2245,8 @@ str get_reginfo_partial(impurecord_t *r, ucontact_t *c, int event_type,
 		if( //richard we only use expired and unregistered
 				(event_type == IMS_REGISTRAR_CONTACT_EXPIRED
 						|| event_type == IMS_REGISTRAR_CONTACT_UNREGISTERED
-						|| event_type == IMS_REGISTRAR_CONTACT_DEREGISTERED)) {
+						|| event_type == IMS_REGISTRAR_CONTACT_DEREGISTERED
+						|| event_type == IMS_REGISTRAR_CONTACT_DEACTIVATED)) {
 			//check if impu record has any other active contacts - if not then set this to terminated - if so then keep this active
 			//check if asserted is present in any of the path headers
 
@@ -2251,8 +2254,7 @@ str get_reginfo_partial(impurecord_t *r, ucontact_t *c, int event_type,
 			impurecord = r->linked_contacts.head;
 			while(impurecord) {
 				c_tmp = impurecord->contact;
-				if((strncasecmp(c_tmp->c.s, c->c.s, c_tmp->c.len) != 0)
-						&& ((c_tmp->expires - act_time) > 0)) {
+				if(c_tmp != c && VALID_CONTACT(c_tmp, act_time)) {
 					LM_DBG("IMPU <%.*s> has another active contact <%.*s> so "
 						   "will set its state to active\n",
 							r->public_identity.len, r->public_identity.s,
@@ -2291,6 +2293,11 @@ str get_reginfo_partial(impurecord_t *r, ucontact_t *c, int event_type,
 				case IMS_REGISTRAR_CONTACT_EXPIRED:
 					state = r_terminated;
 					event = r_expired;
+					expires = 0;
+					break;
+				case IMS_REGISTRAR_CONTACT_DEACTIVATED:
+					state = r_terminated;
+					event = r_deactivated;
 					expires = 0;
 					break;
 				case IMS_REGISTRAR_CONTACT_DEREGISTERED:

@@ -666,6 +666,26 @@ unregister("location");
 
     <section>
       <title><function
+      moreinfo="none">orig_impu_has_contact(domain)</function></title>
+
+      <para>Checks the originating identity in P-Asserted-Identity. Returns
+      1 only if an unbarred IMPU has a stored profile, registered state and
+      a valid linked contact. Returns -1 otherwise. Use only after verifying
+      that the request comes from a trusted P-CSCF. It does not rewrite the
+      Request-URI or check the To identity.</para>
+      <example>
+        <title>Originating admission after trusted-peer validation</title>
+        <programlisting format="linespecific">
+if (!orig_impu_has_contact("location")) {
+    send_reply("403", "Originating registration required");
+    exit;
+}
+        </programlisting>
+      </example>
+    </section>
+
+    <section>
+      <title><function
       moreinfo="none">impu_registered(domain)</function></title>
 
       <para>This function checks if the IMPU in the To header is registered in
