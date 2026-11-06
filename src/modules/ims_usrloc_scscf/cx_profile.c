@@ -1,10 +1,5 @@
 /* Cx profile replacement and network deregistration.
  * SPDX-License-Identifier: GPL-2.0-or-later
- *
- * As a special exception, the copyright holders of the new contributions
- * permit linking those contributions with the OpenSSL library and
- * distributing the resulting combined work. The GNU General Public
- * License applies to all other code.
  */
 #ifdef IMS_CX_PROFILE_TEST
 #include "test/cx_profile_mocks.h"
