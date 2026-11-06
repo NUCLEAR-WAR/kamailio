@@ -1,10 +1,6 @@
 /*
  * KEMI export for the originating registration check.
  * SPDX-License-Identifier: GPL-2.0-or-later
- *
- * As a special exception, the copyright holders permit linking this
- * contribution with the OpenSSL library and distributing the resulting
- * combined work. The GNU General Public License applies to all other code.
  */
 
 #include <string.h>

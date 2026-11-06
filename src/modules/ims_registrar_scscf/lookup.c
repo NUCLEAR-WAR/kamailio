@@ -26,11 +26,6 @@
  * History:
  * ---------
  * 2003-03-12 added support for zombie state (nils)
- *
- * As a special exception, the copyright holders of the new contributions
- * permit linking those contributions with the OpenSSL library and
- * distributing the resulting combined work. The GNU General Public
- * License applies to all other code.
  */
 /*!
  * \file
