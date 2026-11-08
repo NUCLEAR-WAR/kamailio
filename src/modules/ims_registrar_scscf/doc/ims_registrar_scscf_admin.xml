@@ -704,8 +704,7 @@ unregister("location");
       The domain must already be registered with ims_usrloc_scscf. Native
       configuration functions that use the domain, such as save(), register
       it during configuration fixup. The KEMI export returns the same integer
-      result as the native function. In Lua, compare the result with 1 or -1;
-      negative integers are truthy.</para>
+      result as the native function.</para>
       <example>
         <title>Originating admission after trusted-peer validation</title>
         <programlisting format="linespecific">

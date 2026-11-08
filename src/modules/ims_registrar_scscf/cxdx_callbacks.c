@@ -42,12 +42,17 @@ extern char *domain;
 static AAAMessage *cx_answer(AAAMessage *request, int code, int experimental)
 {
 	AAAMessage *answer = cdpb.AAACreateResponse(request);
-	if(!answer)
+	if(!answer) {
+		LM_ERR("Cx command %u: failed to create Diameter answer\n",
+				(unsigned int)request->commandCode);
 		return 0;
+	}
 	if(!cxdx_add_vendor_specific_appid(answer, IMS_vendor_id_3GPP, IMS_Cx, 0)
 			|| !cxdx_add_auth_session_state(answer, 1)
 			|| !(experimental ? cxdx_add_experimental_result(answer, code)
 							  : cxdx_add_result_code(answer, code))) {
+		LM_ERR("Cx command %u: failed to add required answer AVPs\n",
+				(unsigned int)request->commandCode);
 		cdpb.AAAFreeMessage(&answer);
 		return 0;
 	}
@@ -62,14 +67,23 @@ static AAA_AVP *cx_avp(AAAMessage *request, int code, int vendor)
 static AAAMessage *cx_failed_answer(
 		AAAMessage *request, int result, int code, int vendor)
 {
+	const char *problem = result == DIAMETER_MISSING_AVP ? "missing"
+						  : result == DIAMETER_AVP_OCCURS_TOO_MANY_TIMES
+								  ? "duplicate"
+								  : "invalid";
 	AAAMessage *answer = cx_answer(request, result, 0);
 	AAA_AVP *avp = cx_avp(request, code, vendor);
 	char zero[4] = {0};
 	str value = avp ? avp->data : (str){zero, 0};
+	LM_WARN("Cx command %u rejected: %s AVP %d (vendor=%d)\n",
+			(unsigned int)request->commandCode, problem, code, vendor);
 	if(!avp && code == AVP_Auth_Session_State)
 		value.len = 4;
-	if(answer && !cxdx_add_failed_avp(answer, code, vendor, value))
+	if(answer && !cxdx_add_failed_avp(answer, code, vendor, value)) {
+		LM_ERR("Cx command %u: failed to add Failed-AVP for AVP %d\n",
+				(unsigned int)request->commandCode, code);
 		cdpb.AAAFreeMessage(&answer);
+	}
 	return answer;
 }
 
@@ -137,58 +151,78 @@ AAAMessage *cxdx_process_ppr(AAAMessage *request)
 	ims_subscription *profile;
 	udomain_t *d;
 	str private_id;
-	int failed, result = cx_validate_request(request, &failed);
+	int failed, result;
+	LM_DBG("Processing Cx PPR\n");
+	result = cx_validate_request(request, &failed);
 	if(result)
 		return cx_failed_answer(request, result, failed, 0);
 	/* This receiver implements the sender's User-Data/iFC update subset. */
 	if(cx_avp(request, AVP_IMS_Charging_Information, IMS_vendor_id_3GPP)
-			|| cx_avp(request, AVP_IMS_SIP_Auth_Data_Item, IMS_vendor_id_3GPP))
+			|| cx_avp(
+					request, AVP_IMS_SIP_Auth_Data_Item, IMS_vendor_id_3GPP)) {
+		LM_WARN("Cx PPR rejected unsupported charging or authentication "
+				"data\n");
 		return cx_answer(
 				request, RC_IMS_DIAMETER_ERROR_NOT_SUPPORTED_USER_DATA, 1);
+	}
 	data = cx_avp(request, AVP_IMS_User_Data_Cx, IMS_vendor_id_3GPP);
 	if(!data || !data->data.len)
 		return cx_failed_answer(request, DIAMETER_MISSING_AVP,
 				AVP_IMS_User_Data_Cx, IMS_vendor_id_3GPP);
-	if(data->data.len > CX_MAX_USER_DATA)
+	if(data->data.len > CX_MAX_USER_DATA) {
+		LM_WARN("Cx PPR rejected User-Data exceeding %d bytes\n",
+				CX_MAX_USER_DATA);
 		return cx_answer(request, RC_IMS_DIAMETER_ERROR_TOO_MUCH_DATA, 1);
+	}
 	if(cdpb.AAAGetNextAVP(data)
 			&& cdpb.AAAFindMatchingAVP(request, cdpb.AAAGetNextAVP(data),
-					AVP_IMS_User_Data_Cx, IMS_vendor_id_3GPP, 0))
+					AVP_IMS_User_Data_Cx, IMS_vendor_id_3GPP, 0)) {
+		LM_WARN("Cx PPR rejected duplicate User-Data AVP\n");
 		return cx_answer(request, DIAMETER_AVP_OCCURS_TOO_MANY_TIMES, 0);
+	}
 	/* Cx profiles are self-contained XML; never resolve an external DTD. */
-	if(memchr(data->data.s, 0, data->data.len))
+	if(memchr(data->data.s, 0, data->data.len)) {
+		LM_WARN("Cx PPR rejected User-Data containing a NUL byte\n");
 		return cx_answer(
 				request, RC_IMS_DIAMETER_ERROR_NOT_SUPPORTED_USER_DATA, 1);
+	}
 	{
 		int i;
 		for(i = 0; i < data->data.len; i++)
 			if((i + 9 <= data->data.len
 					   && !memcmp(data->data.s + i, "<!DOCTYPE", 9))
 					|| (i + 8 <= data->data.len
-							&& !memcmp(data->data.s + i, "<!ENTITY", 8)))
+							&& !memcmp(data->data.s + i, "<!ENTITY", 8))) {
+				LM_WARN("Cx PPR rejected User-Data with DTD or entity "
+						"declarations\n");
 				return cx_answer(request,
 						RC_IMS_DIAMETER_ERROR_NOT_SUPPORTED_USER_DATA, 1);
+			}
 	}
 	profile = parse_user_data(data->data);
-	if(!profile)
+	if(!profile) {
+		LM_WARN("Cx PPR could not parse User-Data profile\n");
 		return cx_answer(
 				request, RC_IMS_DIAMETER_ERROR_NOT_SUPPORTED_USER_DATA, 1);
+	}
 	profile->ref_count = 1; /* owned here until the cache takes record refs */
 	private_id = cxdx_get_user_name(request);
 	if(profile->private_identity.len != private_id.len
 			|| memcmp(profile->private_identity.s, private_id.s,
 					private_id.len)) {
+		LM_WARN("Cx PPR rejected profile with a mismatched private identity\n");
 		ul.unref_subscription(profile);
 		return cx_answer(
 				request, RC_IMS_DIAMETER_ERROR_IDENTITIES_DONT_MATCH, 1);
 	}
 	if(ul.register_udomain(domain, &d) < 0) {
+		LM_ERR("Cx PPR could not register the usrloc domain\n");
 		ul.unref_subscription(profile);
 		return cx_answer(request, DIAMETER_UNABLE_TO_COMPLY, 0);
 	}
+	LM_DBG("Cx PPR User-Data validated; updating cached profile\n");
 	result = ul.cx_replace_profile(d, profile);
 	ul.unref_subscription(profile);
-	LM_INFO("Cx PPR profile installation result=%d\n", result);
 	return cx_operation_answer(request, result);
 }
 
@@ -208,11 +242,15 @@ AAAMessage *cxdx_process_rtr(AAAMessage *request)
 	str identities[CX_MAX_IDENTITIES], private_id;
 	udomain_t *d;
 	int count = 0, reason = -1, reason_count = 0;
-	int failed, result = cx_validate_request(request, &failed);
+	int failed, result;
+	LM_DBG("Processing Cx RTR\n");
+	result = cx_validate_request(request, &failed);
 	if(result)
 		return cx_failed_answer(request, result, failed, 0);
-	if(cx_avp(request, AVP_IMS_Associated_Identities, IMS_vendor_id_3GPP))
+	if(cx_avp(request, AVP_IMS_Associated_Identities, IMS_vendor_id_3GPP)) {
+		LM_WARN("Cx RTR rejected unsupported Associated-Identities AVP\n");
 		return cx_answer(request, DIAMETER_UNABLE_TO_COMPLY, 0);
+	}
 	reason_avp =
 			cx_avp(request, AVP_IMS_Deregistration_Reason, IMS_vendor_id_3GPP);
 	if(!reason_avp)
@@ -228,14 +266,23 @@ AAAMessage *cxdx_process_rtr(AAAMessage *request)
 		}
 	}
 	cdpb.AAAFreeAVPList(&reason_list);
-	if(reason_count != 1 || reason < 0 || reason > 3)
+	if(reason_count != 1 || reason < 0 || reason > 3) {
+		LM_WARN("Cx RTR rejected invalid Deregistration-Reason (reason=%d "
+				"count=%d)\n",
+				reason, reason_count);
 		return cx_answer(request, DIAMETER_INVALID_AVP_VALUE, 0);
+	}
 	avp = cx_avp(request, AVP_IMS_Public_Identity, IMS_vendor_id_3GPP);
 	while(avp) {
-		if(count == CX_MAX_IDENTITIES)
+		if(count == CX_MAX_IDENTITIES) {
+			LM_WARN("Cx RTR rejected more than %d public identities\n",
+					CX_MAX_IDENTITIES);
 			return cx_answer(request, DIAMETER_RESOURCES_EXCEEDED, 0);
-		if(!avp->data.len)
+		}
+		if(!avp->data.len) {
+			LM_WARN("Cx RTR rejected empty Public-Identity AVP\n");
 			return cx_answer(request, DIAMETER_INVALID_AVP_VALUE, 0);
+		}
 		identities[count++] = avp->data;
 		avp = cdpb.AAAGetNextAVP(avp);
 		if(avp)
@@ -243,15 +290,21 @@ AAAMessage *cxdx_process_rtr(AAAMessage *request)
 					IMS_vendor_id_3GPP, 0);
 	}
 	/* The existing PyHSS sender supplies all identities in the selected IRS. */
-	if(!count)
+	if(!count) {
+		LM_WARN("Cx RTR without Public-Identity is not supported (IMPI-only "
+				"request)\n");
 		return cx_answer(request, DIAMETER_UNABLE_TO_COMPLY, 0);
+	}
 	private_id = cxdx_get_user_name(request);
-	if(ul.register_udomain(domain, &d) < 0)
+	if(ul.register_udomain(domain, &d) < 0) {
+		LM_ERR("Cx RTR could not register the usrloc domain\n");
 		return cx_answer(request, DIAMETER_UNABLE_TO_COMPLY, 0);
+	}
+	LM_DBG("Cx RTR validated reason=%d public identities=%d; starting "
+		   "cleanup\n",
+			reason, count);
 	result = ul.cx_deregister(
 			d, &private_id, identities, count, reason, cx_notify);
-	LM_INFO("Cx RTR cache cleanup reason=%d public_ids=%d result=%d\n", reason,
-			count, result);
 	/* Unsupported RTR scope is a base processing error, not a PPR data error. */
 	if(result == -3)
 		return cx_answer(request, DIAMETER_UNABLE_TO_COMPLY, 0);
