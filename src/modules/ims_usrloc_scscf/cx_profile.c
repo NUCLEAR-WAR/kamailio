@@ -1,7 +1,7 @@
 /*
  * Cx profile replacement and network deregistration.
  *
- * Copyright (C) 2026 NUCLEAR-WAR
+ * Written by Abdul Karim Barbour <a(dot)barbour(at)telekom(punkt)de>
  *
  * This file is part of Kamailio, a free SIP server.
  *
