@@ -223,6 +223,7 @@ AAAMessage *cxdx_process_ppr(AAAMessage *request)
 	LM_DBG("Cx PPR User-Data validated; updating cached profile\n");
 	result = ul.cx_replace_profile(d, profile);
 	ul.unref_subscription(profile);
+	LM_INFO("Cx PPR profile installation result=%d\n", result);
 	return cx_operation_answer(request, result);
 }
 
@@ -305,6 +306,8 @@ AAAMessage *cxdx_process_rtr(AAAMessage *request)
 			reason, count);
 	result = ul.cx_deregister(
 			d, &private_id, identities, count, reason, cx_notify);
+	LM_INFO("Cx RTR cache cleanup reason=%d public_ids=%d result=%d\n", reason,
+			count, result);
 	/* Unsupported RTR scope is a base processing error, not a PPR data error. */
 	if(result == -3)
 		return cx_answer(request, DIAMETER_UNABLE_TO_COMPLY, 0);
