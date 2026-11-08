@@ -172,7 +172,7 @@ int cx_replace_profile(udomain_t *d, ims_subscription *s)
 		unref_subscription(old[i]);
 	unlock_subscription_slot(sl);
 	cx_unlock_cache(d);
-	LM_INFO("Cx PPR installed profile for %d public identities\n", n);
+	LM_DBG("Cx PPR installed profile for %d public identities\n", n);
 	return 0;
 }
 
@@ -320,8 +320,8 @@ done:
 	if(rejection)
 		LM_WARN("Cx RTR cleanup refused: %s\n", rejection);
 	else
-		LM_INFO("Cx RTR cleanup complete: reason=%d requested=%d "
-				"processed=%d\n",
+		LM_DBG("Cx RTR cleanup complete: reason=%d requested=%d "
+			   "processed=%d\n",
 				reason, count, n);
 	return result;
 }
