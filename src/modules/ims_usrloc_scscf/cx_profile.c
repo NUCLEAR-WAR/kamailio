@@ -1,17 +1,35 @@
-/* Cx profile replacement and network deregistration.
+/*
+ * Cx profile replacement and network deregistration.
+ *
+ * Copyright (C) 2026 NUCLEAR-WAR
+ *
+ * This file is part of Kamailio, a free SIP server.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Kamailio is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Kamailio is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifdef IMS_CX_PROFILE_TEST
-#include "test/cx_profile_mocks.h"
-#else
+
 #include "cx_profile.h"
 #include "hslot_sp.h"
 #include "ims_usrloc_scscf_mod.h"
+#include "../../core/dprint.h"
 #include "../../core/hashes.h"
 #include "../../core/mem/shm_mem.h"
 #include "../../core/ut.h"
 #include <string.h>
-#endif
 
 extern gen_lock_set_t *ul_locks;
 extern int ul_locks_no;
@@ -23,7 +41,10 @@ extern ims_subscription_list_t *ims_subscription_list;
 
 static int cx_str_equal(const str *a, const str *b)
 {
-	return a->len == b->len && a->len > 0 && memcmp(a->s, b->s, a->len) == 0;
+	/* Core compares text with strncmp; reject NULs within counted identities. */
+	return a->len > 0 && a->len == b->len && a->s && b->s
+		   && !memchr(a->s, '\0', a->len) && !memchr(b->s, '\0', b->len)
+		   && str_strcmp(a, b) == 0;
 }
 
 /* Domain slots share a small physical lock pool. Never acquire the same
@@ -80,29 +101,44 @@ int cx_replace_profile(udomain_t *d, ims_subscription *s)
 	ims_public_identity *identities[CX_MAX_PUBLIC_IDS];
 	int i, j, k, n = 0, sl, result;
 
-	/* Atomic database persistence is intentionally not simulated. */
-	if(db_mode != NO_DB || !s || s->sl >= 0 || s->wpsi
-			|| !s->private_identity.len)
+	/* Cx profile replacement supports only in-memory user location. */
+	if(db_mode != NO_DB) {
+		LM_WARN("Cx PPR profile replacement requires db_mode=0\n");
 		return -3;
+	}
+	if(!s || s->sl >= 0 || s->wpsi || !s->private_identity.len) {
+		LM_WARN("Cx PPR rejected missing, indexed or wildcard profile\n");
+		return -3;
+	}
 	for(i = 0; i < s->service_profiles_cnt; i++) {
 		for(j = 0; j < s->service_profiles[i].public_identities_cnt; j++) {
 			ims_public_identity *pi =
 					&s->service_profiles[i].public_identities[j];
 			if(n == CX_MAX_PUBLIC_IDS || !pi->public_identity.len
-					|| pi->wildcarded_psi.len)
+					|| pi->wildcarded_psi.len) {
+				LM_WARN("Cx PPR rejected oversized, empty or wildcard identity "
+						"list\n");
 				return -3;
+			}
 			for(k = 0; k < n; k++)
 				if(cx_str_equal(&identities[k]->public_identity,
-						   &pi->public_identity))
+						   &pi->public_identity)) {
+					LM_WARN("Cx PPR rejected duplicate public identity\n");
 					return -3;
+				}
 			identities[n++] = pi;
 		}
 	}
-	if(!n)
+	if(!n) {
+		LM_WARN("Cx PPR profile contains no public identities\n");
 		return -3;
+	}
+	LM_DBG("Cx PPR validating %d public identities in usrloc\n", n);
 	result = cx_lock_cache(d);
-	if(result)
+	if(result) {
+		LM_DBG("Cx PPR cache busy; profile not changed\n");
 		return result;
+	}
 	/* Validate the entire replacement before publishing anything. This first
  * implementation updates existing distinct identities, not IRS membership. */
 	for(i = 0; i < n; i++) {
@@ -114,6 +150,9 @@ int cx_replace_profile(udomain_t *d, ims_subscription *s)
 				|| !cx_str_equal(&records[i]->s->private_identity,
 						&s->private_identity)) {
 			cx_unlock_cache(d);
+			LM_WARN("Cx PPR public identity %d is not registered for this "
+					"profile\n",
+					i + 1);
 			return -1;
 		}
 		old[i] = records[i]->s;
@@ -133,19 +172,23 @@ int cx_replace_profile(udomain_t *d, ims_subscription *s)
 		unref_subscription(old[i]);
 	unlock_subscription_slot(sl);
 	cx_unlock_cache(d);
+	LM_INFO("Cx PPR installed profile for %d public identities\n", n);
 	return 0;
 }
 
 static int cx_emergency_contact(ucontact_t *c)
 {
 	int i;
+	str sos = str_init("sos");
 	/* The baseline does not retain a dedicated emergency ownership flag. */
-	for(i = 0; i + 4 <= c->c.len; i++)
-		if(c->c.s[i] == ';' && (c->c.s[i + 1] | 32) == 's'
-				&& (c->c.s[i + 2] | 32) == 'o' && (c->c.s[i + 3] | 32) == 's'
+	for(i = 0; i + 4 <= c->c.len; i++) {
+		str token = {c->c.s + i + 1, 3};
+		if(c->c.s[i] == ';'
 				&& (i + 4 == c->c.len || c->c.s[i + 4] == ';'
-						|| c->c.s[i + 4] == '=' || c->c.s[i + 4] == '?'))
+						|| c->c.s[i + 4] == '=' || c->c.s[i + 4] == '?')
+				&& str_strcasecmp(&token, &sos) == 0)
 			return 1;
+	}
 	return 0;
 }
 
@@ -156,19 +199,34 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 	impurecord_t *r, *other;
 	impu_contact_t *link, *other_link;
 	ims_subscription *old;
+	const char *rejection = NULL;
 	int i, j, slot, n = 0, result, sl;
 
-	if(db_mode != NO_DB || count <= 0 || count > CX_MAX_PUBLIC_IDS || reason < 0
-			|| reason > 3)
+	if(db_mode != NO_DB) {
+		LM_WARN("Cx RTR cleanup requires db_mode=0\n");
 		return -3;
+	}
+	if(count <= 0 || count > CX_MAX_PUBLIC_IDS || reason < 0 || reason > 3) {
+		LM_WARN("Cx RTR rejected invalid identity count or reason\n");
+		return -3;
+	}
 	result = cx_lock_cache(d);
-	if(result)
+	if(result) {
+		LM_DBG("Cx RTR cache busy; registrations not changed\n");
 		return result;
+	}
 	/* Preflight all identities, preserving unrelated/ambiguous ownership. */
 	for(i = 0; i < count; i++) {
-		if(get_impurecord(d, &ids[i], &r) != 0)
-			continue; /* an already absent alias does not abort the request */
+		LM_DBG("Cx RTR processing public identity %d/%d [%.*s]\n", i + 1, count,
+				ids[i].len, ids[i].s);
+		if(get_impurecord(d, &ids[i], &r) != 0) {
+			LM_WARN("Cx RTR public identity %d/%d not in usrloc; skipping\n",
+					i + 1, count);
+			continue;
+		}
 		if(!cx_str_equal(&r->private_identity, private_id)) {
+			rejection = "public identity does not belong to the requested "
+						"private identity";
 			result = -1;
 			goto done;
 		}
@@ -177,11 +235,13 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 		if(j == n)
 			records[n++] = r;
 		if(reason == 3 && r->reg_state == IMPU_REGISTERED) {
+			rejection = "reason 3 cannot remove a registered identity";
 			result = -3;
 			goto done;
 		}
 		for(link = r->linked_contacts.head; link; link = link->next) {
 			if(cx_emergency_contact(link->contact)) {
+				rejection = "target has an emergency contact";
 				result = -3; /* never deregister an emergency binding blindly */
 				goto done;
 			}
@@ -201,6 +261,8 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 					for(link = records[i]->linked_contacts.head; link;
 							link = link->next)
 						if(link->contact == other_link->contact) {
+							rejection = "contact is shared with an untargeted "
+										"identity";
 							result = -3;
 							goto done;
 						}
@@ -213,6 +275,8 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 		r->reg_state = IMPU_NOT_REGISTERED;
 		r->send_sar_on_delete = 0;
 		for(link = r->linked_contacts.head; link; link = link->next) {
+			LM_DBG("Cx RTR marking contact [%.*s] deleted\n",
+					link->contact->c.len, link->contact->c.s);
 			lock_contact_slot_i(link->contact->sl);
 			link->contact->state = CONTACT_DELETED;
 			unlock_contact_slot_i(link->contact->sl);
@@ -251,5 +315,11 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 	result = 0;
 done:
 	cx_unlock_cache(d);
+	if(rejection)
+		LM_WARN("Cx RTR cleanup refused: %s\n", rejection);
+	else
+		LM_INFO("Cx RTR cleanup complete: reason=%d requested=%d "
+				"processed=%d\n",
+				reason, count, n);
 	return result;
 }
