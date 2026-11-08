@@ -220,8 +220,9 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 		LM_DBG("Cx RTR processing public identity %d/%d [%.*s]\n", i + 1, count,
 				ids[i].len, ids[i].s);
 		if(get_impurecord(d, &ids[i], &r) != 0) {
-			LM_WARN("Cx RTR public identity %d/%d not in usrloc; skipping\n",
-					i + 1, count);
+			LM_WARN("Cx RTR public identity %d/%d [%.*s] not found in usrloc; "
+					"skipping\n",
+					i + 1, count, ids[i].len, ZSW(ids[i].s));
 			continue;
 		}
 		if(!cx_str_equal(&r->private_identity, private_id)) {
@@ -275,8 +276,9 @@ int cx_deregister(udomain_t *d, str *private_id, str *ids, int count,
 		r->reg_state = IMPU_NOT_REGISTERED;
 		r->send_sar_on_delete = 0;
 		for(link = r->linked_contacts.head; link; link = link->next) {
-			LM_DBG("Cx RTR marking contact [%.*s] deleted\n",
-					link->contact->c.len, link->contact->c.s);
+			LM_DBG("Cx RTR marking contact [%.*s] for AOR [%.*s] deleted\n",
+					link->contact->c.len, ZSW(link->contact->c.s),
+					link->contact->aor.len, ZSW(link->contact->aor.s));
 			lock_contact_slot_i(link->contact->sl);
 			link->contact->state = CONTACT_DELETED;
 			unlock_contact_slot_i(link->contact->sl);
