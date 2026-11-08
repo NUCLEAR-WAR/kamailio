@@ -469,5 +469,7 @@ int term_impu_registered(struct sip_msg *_m, char *_t, char *_s)
 
 	res = r->s && r->reg_state != IMPU_NOT_REGISTERED ? 1 : -1;
 	ul.unlock_udomain((udomain_t *)_t, &uri);
+	LM_DBG("Terminating IMPU [%.*s] found in usrloc: check %s\n", uri.len,
+			ZSW(uri.s), res == 1 ? "passed" : "failed");
 	return res;
 }
