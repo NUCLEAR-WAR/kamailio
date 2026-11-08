@@ -178,15 +178,15 @@ int cx_replace_profile(udomain_t *d, ims_subscription *s)
 
 static int cx_emergency_contact(ucontact_t *c)
 {
+	const str marker = str_init(";sos");
+	const str *uri = &c->c;
 	int i;
-	str sos = str_init("sos");
-	/* The baseline does not retain a dedicated emergency ownership flag. */
-	for(i = 0; i + 4 <= c->c.len; i++) {
-		str token = {c->c.s + i + 1, 3};
-		if(c->c.s[i] == ';'
-				&& (i + 4 == c->c.len || c->c.s[i + 4] == ';'
-						|| c->c.s[i + 4] == '=' || c->c.s[i + 4] == '?')
-				&& str_strcasecmp(&token, &sos) == 0)
+	for(i = 0; uri->len - i >= marker.len; i++) {
+		const str token = {uri->s + i, marker.len};
+		int end = i + marker.len;
+		if((end == uri->len || uri->s[end] == ';' || uri->s[end] == '='
+				   || uri->s[end] == '?')
+				&& str_strcasecmp(&token, &marker) == 0)
 			return 1;
 	}
 	return 0;
