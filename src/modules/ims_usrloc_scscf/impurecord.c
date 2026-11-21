@@ -536,18 +536,46 @@ static inline void process_impurecord(impurecord_t *_r)
 			start_dbtransaction();
 			dbwork = 1;
 		}
+		/* a registered identity that lost its last contact ends here
+		 * without a REGISTER from the UE - tell whoever asked for it
+		 * (the registrar informs the HSS, TS 29.228 6.1.2) */
+		if(_r->reg_state == IMPU_REGISTERED
+				&& exists_ulcb_type(_r->cbs, UL_IMPU_REG_NC_DELETE)) {
+			LM_DBG("IMPU <%.*s> was registered and has no contacts left, "
+				   "record is deleted - running REG_NC_DELETE callbacks\n",
+					_r->public_identity.len, _r->public_identity.s);
+			run_ul_callbacks(_r->cbs, UL_IMPU_REG_NC_DELETE, _r, 0);
+		}
 		register_udomain("location", &_d);
 		delete_impurecord(_d, &_r->public_identity, _r);
 	} else {
 		if(!hascontacts && _r->reg_state != IMPU_NOT_REGISTERED) {
 			LM_DBG("This impu is not to be deleted but has no contacts - "
 				   "changing state to IMPU_UNREGISTERED\n");
-			//run callback  here UL_IMPU_UNREG_NC for UL_IMPU_UNREG_NC
-			if(_r->reg_state != IMPU_UNREGISTERED
-					&& exists_ulcb_type(_r->cbs, UL_IMPU_UNREG_NC)) {
-				run_ul_callbacks(_r->cbs, UL_IMPU_UNREG_NC, _r, 0);
+			/* same as above for a record that is kept because of a reg
+			 * event subscription; the state changes here, so this runs
+			 * once per registration. The callback may move the record to
+			 * IMPU_NOT_REGISTERED when the HSS was told to release the
+			 * S-CSCF (TS 29.228 6.1.2.1) - then it is not "unregistered
+			 * with a stored profile" */
+			if(_r->reg_state == IMPU_REGISTERED
+					&& exists_ulcb_type(_r->cbs, UL_IMPU_REG_NC_DELETE)) {
+				LM_DBG("IMPU <%.*s> was registered and has no contacts left, "
+					   "record is kept - running REG_NC_DELETE callbacks\n",
+						_r->public_identity.len, _r->public_identity.s);
+				run_ul_callbacks(_r->cbs, UL_IMPU_REG_NC_DELETE, _r, 0);
+				LM_DBG("IMPU <%.*s> is in state %s after the callbacks\n",
+						_r->public_identity.len, _r->public_identity.s,
+						get_impu_regstate_as_string(_r->reg_state));
 			}
-			_r->reg_state = IMPU_UNREGISTERED;
+			if(_r->reg_state != IMPU_NOT_REGISTERED) {
+				//run callback  here UL_IMPU_UNREG_NC for UL_IMPU_UNREG_NC
+				if(_r->reg_state != IMPU_UNREGISTERED
+						&& exists_ulcb_type(_r->cbs, UL_IMPU_UNREG_NC)) {
+					run_ul_callbacks(_r->cbs, UL_IMPU_UNREG_NC, _r, 0);
+				}
+				_r->reg_state = IMPU_UNREGISTERED;
+			}
 		}
 	}
 
@@ -1212,6 +1240,17 @@ int update_impurecord(struct udomain *_d, str *public_identity,
 	//if we get here, we have a record to update
 	LM_DBG("updating IMPU record with public identity for <%.*s>\n",
 			impu_str->len, impu_str->s);
+	/* a new registration of a kept record starts with the defaults of a
+	 * new record, or an earlier explicit de-registration would silence
+	 * the SAR of a later timeout */
+	if(reg_state == IMPU_REGISTERED && (*_r)->reg_state != IMPU_REGISTERED) {
+		LM_DBG("IMPU <%.*s> registers again on a kept record (was %s) - "
+			   "SAR on network de-registration is armed again\n",
+				impu_str->len, impu_str->s,
+				get_impu_regstate_as_string((*_r)->reg_state));
+		(*_r)->send_sar_on_delete = 1;
+		(*_r)->nw_dereg_admin = 0;
+	}
 	(*_r)->reg_state = reg_state;
 	if(reg_state == IMPU_UNREGISTERED) {
 		//update unreg expiry so the unreg record is not stored 'forever'
